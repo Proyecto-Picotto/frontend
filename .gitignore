@@ -1,3 +1,48 @@
-node_modules
-.expo
-.env
+# Node modules
+node_modules/
+**/node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# Expo / React Native
+.expo/
+.expo-shared/
+web-build/
+dist/
+*.expo
+*.expo-shared
+
+# Metro bundler cache
+.expo/metro-cache/
+*.temp
+
+# iOS / macOS
+ios/Pods/
+ios/build/
+*.pbxuser
+*.xcuserstate
+*.xcodeproj
+*.xcworkspace
+*.DS_Store
+
+# Android
+android/.gradle/
+android/build/
+*.apk
+*.keystore
+
+# VSCode
+.vscode/
+
+# JetBrains IDEs
+.idea/
+
+# Misc
+*.swp
+*.swo
