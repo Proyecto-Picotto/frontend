@@ -2,6 +2,7 @@ import React, {useState} from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert } from 'react-native';
 import styles from '../styles';
 import { apiLogin } from '../api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function LoginScreen({navigation}) {
   const [email,setEmail] = useState('');
@@ -20,6 +21,13 @@ export default function LoginScreen({navigation}) {
       const res = await apiLogin({ email, password });
       console.log('apiLogin response', res);
       if(res && res.token){
+        // Guardar token y usuario para uso posterior
+        try{
+          await AsyncStorage.setItem('token', res.token);
+          await AsyncStorage.setItem('user', JSON.stringify(res.user));
+        }catch(e){
+          console.error('Error saving token', e);
+        }
         navigation.replace('Home', { user: res.user });
       } else {
         // Mostrar error de forma visual en la pantalla

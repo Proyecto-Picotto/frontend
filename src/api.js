@@ -37,3 +37,22 @@ export const apiLogin = async ({ email, password }) => {
   });
   return handleResponse(res);
 };
+
+// Enviar puntaje al backend. `token` es el JWT del usuario.
+export const apiSendScore = async (token, { score, time }) => {
+  const res = await fetch(`${BASE_URL}/score`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ score, time })
+  });
+  return handleResponse(res);
+};
+
+// Obtener ranking desde el backend
+export const apiGetRanking = async (token) => {
+  const res = await fetch(`${BASE_URL}/ranking`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return handleResponse(res);
+};
