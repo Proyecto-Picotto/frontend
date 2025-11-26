@@ -1,316 +1,257 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Dimensions, Alert, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useEffect, useRef, useState } from "react";
+import { StyleSheet, View, Text, Alert } from "react-native";
+import { Accelerometer } from "expo-sensors";
+import { TouchableOpacity } from "react-native-web";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiSendScore } from '../api';
+import { Platform } from 'react-native';
 
-// Laberinto: Juego de tablero con bola que se mueve por acelerómetro (móvil) o teclado WASD (web)
-export default function LaberintoScreen({ navigation }) {
-  const winWidth = Dimensions.get('window').width;
-  const BOARD_SIZE = Math.min(winWidth - 40, 320);
+export default function Game({ navigation }) {
+  const BOARD_SIZE = 360;
   const BALL_SIZE = 20;
-  const GOAL_SIZE = 35;
 
-  // Estado del juego
-  const [ballPos, setBallPos] = useState({
-    x: BOARD_SIZE / 2 - BALL_SIZE / 2,
-    y: BOARD_SIZE / 2 - BALL_SIZE / 2,
-  });
   const ballVel = useRef({ x: 0, y: 0 });
-  const [gameRunning, setGameRunning] = useState(true);
-  const [startTime, setStartTime] = useState(null);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [token, setToken] = useState(null);
-  const [user, setUser] = useState(null);
+  const accData = useRef({ x: 0, y: 0 });
+  const animationFrameId = useRef(null);
 
-  // Posición meta (esquina inferior derecha)
+  const [isPaused, setIsPaused] = useState(false); // Auto-start
+  const isPausedRef = useRef(isPaused);
+  const victoryRef = useRef(false);
+
+  // Timer
+  const [seconds, setSeconds] = useState(0);
+  const timerRef = useRef(null);
+
+  const mazeMap = [
+    [1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,1,0,0,0,0,1],
+    [1,0,1,0,1,0,1,1,0,1],
+    [1,0,1,0,0,0,1,0,0,1],
+    [1,0,1,1,1,0,1,0,1,1],
+    [1,0,0,0,0,0,1,0,0,1],
+    [1,1,1,1,1,0,1,1,0,1],
+    [1,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,1,1,1,1,0,1],
+    [1,1,1,1,1,1,1,1,1,1],
+  ];
+
+  const cellSize = BOARD_SIZE / mazeMap.length;
+
+  // place ball centered inside cell (1,1)
+  const initialPos = {
+    x: 1 * cellSize + (cellSize - BALL_SIZE) / 2,
+    y: 1 * cellSize + (cellSize - BALL_SIZE) / 2,
+  };
+
+  // goal in opposite corner: inner bottom-right cell (len-2, len-2)
+  const goalRow = mazeMap.length - 2;
+  const goalCol = mazeMap[0].length - 2;
   const goalPos = {
-    x: BOARD_SIZE - GOAL_SIZE - 10,
-    y: BOARD_SIZE - GOAL_SIZE - 10,
+    x: goalCol * cellSize,
+    y: goalRow * cellSize,
   };
 
-  // Referencias
-  const accelSubRef = useRef(null);
-  const rafRef = useRef(null);
-  const keysPressed = useRef({});
+  const posRef = useRef(initialPos);
+  const [ballPos, setBallPos] = useState(initialPos);
 
-  // Cargar token y usuario
-  useEffect(() => {
-    const loadAuth = async () => {
-      try {
-        const t = await AsyncStorage.getItem('token');
-        const u = await AsyncStorage.getItem('user');
-        setToken(t);
-        if (u) setUser(JSON.parse(u));
-        if (!t) {
-          Alert.alert('Error', 'Necesitas estar logueado para jugar', [
-            { text: 'Aceptar', onPress: () => navigation.replace('Login') },
-          ]);
-        }
-      } catch (e) {
-        console.error('Error cargando auth', e);
-      }
-    };
-    loadAuth();
-  }, [navigation]);
-
-  // Iniciar juego: acelerómetro (si disponible) + RAF loop
-  useEffect(() => {
-    if (!token) return;
-
-    setStartTime(Date.now());
-
-    // Intentar cargar acelerómetro (móvil)
-    let accelSubscription = null;
-    try {
-      const { Accelerometer } = require('expo-sensors');
-      Accelerometer.setUpdateInterval(50);
-      accelSubscription = Accelerometer.addListener((data) => {
-        const scale = 0.8;
-        ballVel.current.x += data.x * scale;
-        ballVel.current.y -= data.y * scale; // invertir Y para que la lógica sea intuitiva
-      });
-    } catch (e) {
-      console.log('Acelerómetro no disponible (web)', e.message);
-    }
-    accelSubRef.current = accelSubscription;
-
-    // Listener de teclado para web (WASD)
-    const handleKeyDown = (e) => {
-      if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) {
-        keysPressed.current[e.key.toLowerCase()] = true;
-        e.preventDefault();
-      }
-    };
-    const handleKeyUp = (e) => {
-      if (['w', 'a', 's', 'd', 'W', 'A', 'S', 'D'].includes(e.key)) {
-        keysPressed.current[e.key.toLowerCase()] = false;
-        e.preventDefault();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-
-    // RAF loop: integrar velocidad, clampar, colisiones, actualizar tiempo
-    let lastTime = Date.now();
-    const gameLoop = () => {
-      const now = Date.now();
-      const dt = Math.max(0.001, (now - lastTime) / 1000); // delta time en segundos
-      lastTime = now;
-
-      // Aplicar entrada de teclado (web fallback)
-      const keyAccel = 50; // aceleración por tecla
-      if (keysPressed.current.w) ballVel.current.y -= keyAccel * dt;
-      if (keysPressed.current.s) ballVel.current.y += keyAccel * dt;
-      if (keysPressed.current.a) ballVel.current.x -= keyAccel * dt;
-      if (keysPressed.current.d) ballVel.current.x += keyAccel * dt;
-
-      // Integrar velocidad en posición
-      let newX = ballPos.x + ballVel.current.x * dt * 100;
-      let newY = ballPos.y + ballVel.current.y * dt * 100;
-
-      // Damping (fricción)
-      ballVel.current.x *= 0.94;
-      ballVel.current.y *= 0.94;
-
-      // Clampar a bordes
-      newX = Math.max(0, Math.min(newX, BOARD_SIZE - BALL_SIZE));
-      newY = Math.max(0, Math.min(newY, BOARD_SIZE - BALL_SIZE));
-
-      setBallPos({ x: newX, y: newY });
-
-      // Actualizar tiempo transcurrido
-      if (gameRunning && startTime) {
-        setElapsedMs(Date.now() - startTime);
-      }
-
-      // Detectar colisión con meta (distancia entre centros)
-      const ballCenterX = newX + BALL_SIZE / 2;
-      const ballCenterY = newY + BALL_SIZE / 2;
-      const goalCenterX = goalPos.x + GOAL_SIZE / 2;
-      const goalCenterY = goalPos.y + GOAL_SIZE / 2;
-      const dist = Math.sqrt((ballCenterX - goalCenterX) ** 2 + (ballCenterY - goalCenterY) ** 2);
-      if (dist < BALL_SIZE / 2 + GOAL_SIZE / 2) {
-        // ¡Ganaste!
-        handleVictory(Date.now() - (startTime || Date.now()));
-        return;
-      }
-
-      rafRef.current = requestAnimationFrame(gameLoop);
-    };
-
-    rafRef.current = requestAnimationFrame(gameLoop);
-
-    // Cleanup
-    return () => {
-      if (accelSubRef.current) {
-        accelSubRef.current.remove();
-      }
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, gameRunning, startTime]);
-
-  const handleVictory = async (timeMsTotal) => {
-    setGameRunning(false);
-    if (accelSubRef.current) accelSubRef.current.remove();
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-    const timeSec = Math.max(0.1, timeMsTotal / 1000);
-    // Puntaje: cuanto más rápido, mejor (basado en tiempo inverso)
-    const score = Math.max(100, Math.round(50000 / timeSec));
-
-    Alert.alert(
-      '¡Victoria!',
-      `Tiempo: ${timeSec.toFixed(2)}s\nPuntaje: ${score}`,
-      [
-        {
-          text: 'Aceptar',
-          onPress: async () => {
-            // Enviar puntaje al backend
-            try {
-              if (token) {
-                await apiSendScore(token, { score, time: timeSec });
-              }
-            } catch (e) {
-              console.error('Error enviando puntaje', e);
-            }
-            // Ir al ranking
-            navigation.replace('Ranking');
-          },
-        },
-      ]
-    );
-  };
-
-  const handleReset = () => {
-    setBallPos({ x: BOARD_SIZE / 2 - BALL_SIZE / 2, y: BOARD_SIZE / 2 - BALL_SIZE / 2 });
+  const resetGame = () => {
     ballVel.current = { x: 0, y: 0 };
-    setStartTime(Date.now());
-    setElapsedMs(0);
-    setGameRunning(true);
+    posRef.current = { ...initialPos };
+    setBallPos({ ...initialPos });
+    setSeconds(0);
+    setIsPaused(true);
+    victoryRef.current = false;
+
+    // Stop timer
+    if (timerRef.current) clearInterval(timerRef.current);
   };
+
+  const handleVictory = async () => {
+    if (victoryRef.current) return;
+    victoryRef.current = true;
+    setIsPaused(true);
+    try {
+      const token = await AsyncStorage.getItem('token');
+      const score = Math.max(1, Math.round(1000 / (seconds + 1)));
+      let resp = null;
+      if (token) {
+        resp = await apiSendScore(token, { score, time: seconds });
+      }
+
+      const message = `¡Ganaste! Tiempo: ${seconds}s\nScore: ${score}` + (resp && resp.message ? `\n${resp.message}` : '');
+      if (Platform && Platform.OS === 'web') {
+        window.alert(message);
+      } else {
+        Alert.alert('Victoria', message);
+      }
+
+      // navegar al ranking si recibimos token
+      if (navigation) navigation.navigate('Ranking');
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (Platform && Platform.OS === 'web') window.alert('Error al enviar score: ' + msg);
+      else Alert.alert('Error', 'Error al enviar score: ' + msg);
+    }
+  };
+
+
+  // ⌨️ WASD Controls — siempre activos
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const speed = 1.5;
+      if (e.key === "w" || e.key === "W") { ballVel.current.y -= speed; e.preventDefault(); }
+      if (e.key === "s" || e.key === "S") { ballVel.current.y += speed; e.preventDefault(); }
+      if (e.key === "a" || e.key === "A") { ballVel.current.x -= speed; e.preventDefault(); }
+      if (e.key === "d" || e.key === "D") { ballVel.current.x += speed; e.preventDefault(); }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+
+  // ⏱️ Timer
+  useEffect(() => {
+    if (!isPaused) {
+      timerRef.current = setInterval(() => {
+        setSeconds((sec) => sec + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isPaused]);
+
+
+  // 🎮 Accelerometer (only mobile)
+  useEffect(() => {
+    Accelerometer.setUpdateInterval(16);
+    const subscription = Accelerometer.addListener(({ x, y }) => {
+      accData.current = { x, y };
+    });
+
+    return () => subscription && subscription.remove();
+  }, []);
+
+
+  // 🎱 Physics Loop
+  // Physics loop: use refs for position so keyboard input and accel apply immediately
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+
+  useEffect(() => {
+    const accMult = 0.5;
+
+    const update = () => {
+      if (!isPausedRef.current) {
+        ballVel.current.x += accData.current.x * accMult;
+        ballVel.current.y -= accData.current.y * accMult;
+
+        // Fricción
+        ballVel.current.x *= 0.95;
+        ballVel.current.y *= 0.95;
+
+        let newX = posRef.current.x + ballVel.current.x;
+        let newY = posRef.current.y + ballVel.current.y;
+
+        // Clampar a bordes
+        newX = Math.max(0, Math.min(newX, BOARD_SIZE - BALL_SIZE));
+        newY = Math.max(0, Math.min(newY, BOARD_SIZE - BALL_SIZE));
+
+        const col = Math.floor((newX + BALL_SIZE / 2) / cellSize);
+        const row = Math.floor((newY + BALL_SIZE / 2) / cellSize);
+
+        // Verificar colisión con paredes y meta
+        if (row >= 0 && row < mazeMap.length && col >= 0 && col < mazeMap[0].length) {
+          // Si llegamos a la meta
+          if (row === goalRow && col === goalCol) {
+            const goalCenterX = goalCol * cellSize + (cellSize - BALL_SIZE) / 2;
+            const goalCenterY = goalRow * cellSize + (cellSize - BALL_SIZE) / 2;
+            posRef.current = { x: goalCenterX, y: goalCenterY };
+            setBallPos({ x: goalCenterX, y: goalCenterY });
+            handleVictory();
+          } else if (mazeMap[row][col] === 1) {
+            ballVel.current.x *= -0.2;
+            ballVel.current.y *= -0.2;
+          } else {
+            posRef.current = { x: newX, y: newY };
+            setBallPos({ x: newX, y: newY });
+          }
+        } else {
+          // fuera de rango, actualizar posición
+          posRef.current = { x: newX, y: newY };
+          setBallPos({ x: newX, y: newY });
+        }
+      }
+
+      animationFrameId.current = requestAnimationFrame(update);
+    };
+
+    animationFrameId.current = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(animationFrameId.current);
+  }, []);
+
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="padding">
-      <View style={styles.header}>
-        <Text style={styles.title}>Laberinto</Text>
-        <Text style={styles.timer}>Tiempo: {(elapsedMs / 1000).toFixed(2)}s</Text>
-      </View>
+    <View style={styles.container}>
+      <Text style={styles.timer}>{seconds}s</Text>
 
-      {/* Tablero del juego */}
-      <View
-        style={[
-          styles.board,
-          {
-            width: BOARD_SIZE,
-            height: BOARD_SIZE,
-          },
-        ]}
-      >
-        {/* Meta (meta amarilla) */}
+      <View style={styles.board}>
+        {mazeMap.map((row, r) =>
+          row.map((cell, c) =>
+            cell === 1 && (
+              <View
+                key={`${r}-${c}`}
+                style={[
+                  styles.wall,
+                  { left: c * cellSize, top: r * cellSize, width: cellSize, height: cellSize },
+                ]}
+              />
+            )
+          )
+        )}
+
+        {/* Goal square */}
         <View
           style={[
             styles.goal,
-            {
-              width: GOAL_SIZE,
-              height: GOAL_SIZE,
-              left: goalPos.x,
-              top: goalPos.y,
-            },
+            { left: goalPos.x, top: goalPos.y, width: cellSize, height: cellSize },
           ]}
         />
 
-        {/* Bola (bola roja) */}
         <View
           style={[
             styles.ball,
-            {
-              width: BALL_SIZE,
-              height: BALL_SIZE,
-              left: ballPos.x,
-              top: ballPos.y,
-            },
+            { left: ballPos.x, top: ballPos.y, width: BALL_SIZE, height: BALL_SIZE },
           ]}
         />
       </View>
 
-      {/* Controles */}
-      <View style={styles.controls}>
-        <Text style={styles.controlsText}>
-          {Platform.OS === 'web' ? 'Usa WASD para mover' : 'Inclina el dispositivo'}
-        </Text>
-        <TouchableOpacity style={styles.button} onPress={handleReset}>
-          <Text style={styles.buttonText}>Reiniciar</Text>
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() => setIsPaused(!isPaused)}
+      >
+        <Text style={styles.buttonText}>{isPaused ? "START" : "PAUSE"}</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.button} onPress={resetGame}>
+        <Text style={styles.buttonText}>RESET</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f172a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 20,
-  },
-  header: {
-    marginBottom: 20,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  timer: {
-    fontSize: 16,
-    color: '#e2e8f0',
-  },
-  board: {
-    borderWidth: 3,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    position: 'relative',
-    overflow: 'hidden',
-    marginVertical: 16,
-  },
-  ball: {
-    position: 'absolute',
-    backgroundColor: '#ef4444',
-    borderRadius: 999,
-  },
-  goal: {
-    position: 'absolute',
-    backgroundColor: '#fde68a',
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#f59e0b',
-  },
-  controls: {
-    marginTop: 20,
-    alignItems: 'center',
-  },
-  controlsText: {
-    color: '#e2e8f0',
-    marginBottom: 12,
-    fontSize: 14,
-  },
-  button: {
-    backgroundColor: '#0ea5a4',
-    paddingVertical: 10,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, alignItems: "center", justifyContent: "center", gap: 15 },
+  board: { width: 360, height: 360, backgroundColor: "#fff", borderWidth: 3, borderColor: "#000" },
+  ball: { position: "absolute", borderRadius: 20, backgroundColor: "red" },
+  wall: { position: "absolute", backgroundColor: "black" },
+  goal: { position: "absolute", backgroundColor: "yellow", borderWidth: 2, borderColor: '#aa8800' },
+  button: { backgroundColor: "#0066ff", padding: 10, width: 120, alignItems: "center", borderRadius: 8 },
+  buttonText: { color: "white", fontSize: 18, fontWeight: "bold" },
+  timer: { fontSize: 24, fontWeight: "bold" },
 });
