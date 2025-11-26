@@ -3,7 +3,6 @@ import { StyleSheet, View, Text, Alert } from "react-native";
 import { Accelerometer } from "expo-sensors";
 import { TouchableOpacity } from "react-native-web";
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiSendScore } from '../api';
 import { Platform } from 'react-native';
 
 export default function Game({ navigation }) {
@@ -71,22 +70,15 @@ export default function Game({ navigation }) {
     victoryRef.current = true;
     setIsPaused(true);
     try {
-      const token = await AsyncStorage.getItem('token');
-      const score = Math.max(1, Math.round(1000 / (seconds + 1)));
-      let resp = null;
-      if (token) {
-        resp = await apiSendScore(token, { score, time: seconds });
-      }
-
-      const message = `¡Ganaste! Tiempo: ${seconds}s\nScore: ${score}` + (resp && resp.message ? `\n${resp.message}` : '');
-      if (Platform && Platform.OS === 'web') {
-        window.alert(message);
-      } else {
-        Alert.alert('Victoria', message);
-      }
-
-      // navegar al ranking si recibimos token
-      if (navigation) navigation.navigate('Ranking');
+      // No network calls: solo mostrar popup con nombre y puntaje
+      const rawUser = await AsyncStorage.getItem('user');
+      const user = rawUser ? JSON.parse(rawUser) : null;
+      const username = user?.username || user?.name || 'Jugador';
+      // Puntaje aleatorio entre 40 y 75 (inclusive)
+      const puntaje = Math.floor(Math.random() * 36) + 40;
+      const message = `ganastee\n${username}\npuntaje: ${puntaje}`;
+      if (Platform && Platform.OS === 'web') window.alert(message);
+      else Alert.alert('ganastee', `${username}\npuntaje: ${puntaje}`);
     } catch (err) {
       const msg = err?.message || String(err);
       if (Platform && Platform.OS === 'web') window.alert('Error al enviar score: ' + msg);

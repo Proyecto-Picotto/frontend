@@ -1,68 +1,35 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList } from 'react-native';
 import styles from '../styles';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiGetRanking } from '../api';
 
+// Local mock ranking generation (sin GET/POST)
 export default function RankingScreen(){
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [items, setItems] = useState([]);
-  const [me, setMe] = useState(null);
 
   useEffect(()=>{
-    async function load(){
-      try{
-        const token = await AsyncStorage.getItem('token');
-        const raw = await AsyncStorage.getItem('user');
-        const user = raw ? JSON.parse(raw) : null;
-        setMe(user?.username);
-        if(!token){
-          setError('No estás logueado');
-          setLoading(false);
-          return;
-        }
-        const res = await apiGetRanking(token);
-        // expecting res.ranking or array
-        const list = Array.isArray(res) ? res : (res.ranking || []);
-        setItems(list);
-      }catch(e){
-        console.error('Error loading ranking', e);
-        setError(String(e));
-      }finally{
-        setLoading(false);
-      }
-    }
-    load();
+    // nombres solicitados
+    const names = ['rr','tt','q1q','lucas','lucasss','1'];
+    // generar puntajes aleatorios entre 100 y 75
+    const list = names.map(n => ({ username: n, score: Math.floor(75 + Math.random() * (100 - 75 + 1)) }));
+    // ordenar descendente por score
+    list.sort((a,b)=> b.score - a.score);
+    setItems(list);
   }, []);
-
-  if(loading) return (
-    <View style={styles.container}>
-      <View style={styles.card}><ActivityIndicator /></View>
-    </View>
-  );
-
-  if(error) return (
-    <View style={styles.container}>
-      <View style={styles.card}><Text style={{color:'crimson'}}>{error}</Text></View>
-    </View>
-  );
 
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        <Text style={styles.title}>Ranking</Text>
+        <Text style={styles.title}>Ranking (local)</Text>
         <FlatList
           data={items}
-          keyExtractor={(i,idx)=>String(i.username || i.name || idx)}
-          renderItem={({item})=>{
-            const name = item.username || item.name;
-            const score = item.score || item.points || item.puntaje;
-            const highlight = me && name === me;
+          keyExtractor={(i,idx)=>String(i.username || idx)}
+          renderItem={({item, index})=>{
+            const name = item.username;
+            const score = item.score;
             return (
               <View style={{flexDirection:'row',justifyContent:'space-between',paddingVertical:8}}>
-                <Text style={{fontWeight: highlight? '700':'400'}}>{ name }</Text>
-                <Text style={{fontWeight: highlight? '700':'400'}}>{ score }</Text>
+                <Text>{index+1}. {name}</Text>
+                <Text>{score}</Text>
               </View>
             );
           }}
